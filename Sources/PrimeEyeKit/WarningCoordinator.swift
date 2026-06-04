@@ -51,9 +51,10 @@ public struct WarningCoordinator: Equatable, Sendable {
                 elapsed >= glowDelay    ? .glow    : .none
             advance(to: target)
 
-        case .upright, .unknown:
-            // Both count as "not slouching" for recovery. unknown (person left / occluded)
-            // recovers the UI rather than freezing an amber glow on an empty chair.
+        case .upright, .unknown, .presentUnmeasured:
+            // All count as "not slouching" for recovery. unknown (person left) and
+            // presentUnmeasured (here but shoulders not visible) both recover the UI rather
+            // than freezing an amber glow - we never nudge on a frame we couldn't measure.
             let start = notSlouchingStart ?? now
             notSlouchingStart = start
             if now - start >= recoveryHold {

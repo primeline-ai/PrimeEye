@@ -4,97 +4,41 @@ import CoreGraphics
 
 final class PostureMetricsTests: XCTestCase {
 
-    // Helper: an "upright" pose - ears well above shoulders, head centered.
-    private func uprightJoints() -> PostureJoints {
-        PostureJoints(
-            leftEar: CGPoint(x: 0.45, y: 0.80),
-            rightEar: CGPoint(x: 0.55, y: 0.80),
-            leftShoulder: CGPoint(x: 0.35, y: 0.50),
-            rightShoulder: CGPoint(x: 0.65, y: 0.50)
-        )
+    func testMetricsNilWhenFaceTooSmall() {
+        XCTAssertNil(PostureMetrics.metrics(faceSize: 0.01, faceCenterY: 0.5))
     }
 
-    func testMetricsNilWhenShouldersMissing() {
-        let j = PostureJoints(leftEar: CGPoint(x: 0.5, y: 0.8))
-        XCTAssertNil(PostureMetrics.metrics(from: j))
-    }
-
-    func testMetricsNilWhenEarsMissing() {
-        let j = PostureJoints(
-            leftShoulder: CGPoint(x: 0.35, y: 0.5),
-            rightShoulder: CGPoint(x: 0.65, y: 0.5)
-        )
-        XCTAssertNil(PostureMetrics.metrics(from: j))
-    }
-
-    func testMetricsNilWhenShouldersCoincide() {
-        let j = PostureJoints(
-            leftEar: CGPoint(x: 0.5, y: 0.8),
-            rightEar: CGPoint(x: 0.5, y: 0.8),
-            leftShoulder: CGPoint(x: 0.5, y: 0.5),
-            rightShoulder: CGPoint(x: 0.5, y: 0.5)  // zero width -> untrustworthy
-        )
-        XCTAssertNil(PostureMetrics.metrics(from: j))
-    }
-
-    func testOneEarIsEnough() {
-        let j = PostureJoints(
-            leftEar: CGPoint(x: 0.45, y: 0.80),
-            leftShoulder: CGPoint(x: 0.35, y: 0.50),
-            rightShoulder: CGPoint(x: 0.65, y: 0.50)
-        )
-        XCTAssertNotNil(PostureMetrics.metrics(from: j))
-    }
-
-    func testUprightMetricsAreScaleInvariant() {
-        // Same pose, person twice as close (all coords scaled about center) -> same metrics.
-        let near = uprightJoints()
-        func scaled(_ p: CGPoint, by k: CGFloat) -> CGPoint {
-            CGPoint(x: 0.5 + (p.x - 0.5) * k, y: 0.5 + (p.y - 0.5) * k)
-        }
-        let far = PostureJoints(
-            leftEar: scaled(CGPoint(x: 0.45, y: 0.80), by: 0.5),
-            rightEar: scaled(CGPoint(x: 0.55, y: 0.80), by: 0.5),
-            leftShoulder: scaled(CGPoint(x: 0.35, y: 0.50), by: 0.5),
-            rightShoulder: scaled(CGPoint(x: 0.65, y: 0.50), by: 0.5)
-        )
-        let mNear = PostureMetrics.metrics(from: near)!
-        let mFar = PostureMetrics.metrics(from: far)!
-        XCTAssertEqual(mNear.slump, mFar.slump, accuracy: 1e-9)
-        XCTAssertEqual(mNear.forwardHead, mFar.forwardHead, accuracy: 1e-9)
+    func testMetricsFromBoundingBox() {
+        let box = CGRect(x: 0.4, y: 0.5, width: 0.2, height: 0.3)  // midY = 0.65, height = 0.3
+        let m = PostureMetrics.metrics(faceBoundingBox: box)!
+        XCTAssertEqual(m.faceSize, 0.3, accuracy: 1e-9)
+        XCTAssertEqual(m.faceCenterY, 0.65, accuracy: 1e-9)
     }
 
     func testClassifyUprightAtBaseline() {
-        let m = PostureMetrics.metrics(from: uprightJoints())!
-        let baseline = Baseline(forwardHead: m.forwardHead, slump: m.slump)
+        let baseline = Baseline(faceSize: 0.30, faceCenterY: 0.60)
+        let m = SlouchMetrics(faceSize: 0.30, faceCenterY: 0.60)
         XCTAssertEqual(PostureMetrics.classify(m, baseline: baseline), .upright)
     }
 
-    func testClassifySlouchWhenHeadDrops() {
-        let baselineMetrics = PostureMetrics.metrics(from: uprightJoints())!
-        let baseline = Baseline(forwardHead: baselineMetrics.forwardHead, slump: baselineMetrics.slump)
-        // Head dropped: ears much closer to shoulders vertically -> slump shrinks.
-        let slouched = PostureJoints(
-            leftEar: CGPoint(x: 0.45, y: 0.56),
-            rightEar: CGPoint(x: 0.55, y: 0.56),
-            leftShoulder: CGPoint(x: 0.35, y: 0.50),
-            rightShoulder: CGPoint(x: 0.65, y: 0.50)
-        )
-        let m = PostureMetrics.metrics(from: slouched)!
+    func testClassifySlouchWhenLeaningIn() {
+        // Face grew well past baseline (craned toward the screen) -> slouch.
+        let baseline = Baseline(faceSize: 0.30, faceCenterY: 0.60)
+        let m = SlouchMetrics(faceSize: 0.30 + PostureThresholds.default.sizeDelta + 0.02, faceCenterY: 0.60)
         XCTAssertEqual(PostureMetrics.classify(m, baseline: baseline), .slouching)
     }
 
-    func testClassifySlouchWhenHeadLeans() {
-        let baselineMetrics = PostureMetrics.metrics(from: uprightJoints())!
-        let baseline = Baseline(forwardHead: baselineMetrics.forwardHead, slump: baselineMetrics.slump)
-        // Head leaned far to one side: ear midpoint x shifts well past the shoulder midpoint.
-        let leaned = PostureJoints(
-            leftEar: CGPoint(x: 0.70, y: 0.80),
-            rightEar: CGPoint(x: 0.80, y: 0.80),
-            leftShoulder: CGPoint(x: 0.35, y: 0.50),
-            rightShoulder: CGPoint(x: 0.65, y: 0.50)
-        )
-        let m = PostureMetrics.metrics(from: leaned)!
+    func testClassifySlouchWhenHeadDrops() {
+        // Face center fell below baseline (head dropped toward the desk) -> slouch.
+        let baseline = Baseline(faceSize: 0.30, faceCenterY: 0.60)
+        let m = SlouchMetrics(faceSize: 0.30, faceCenterY: 0.60 - PostureThresholds.default.dropDelta - 0.02)
         XCTAssertEqual(PostureMetrics.classify(m, baseline: baseline), .slouching)
+    }
+
+    func testSmallWobbleStaysUpright() {
+        // Movement within the tolerance band must NOT flag (no nagging on tiny shifts).
+        let baseline = Baseline(faceSize: 0.30, faceCenterY: 0.60)
+        let m = SlouchMetrics(faceSize: 0.31, faceCenterY: 0.59)
+        XCTAssertEqual(PostureMetrics.classify(m, baseline: baseline), .upright)
     }
 }

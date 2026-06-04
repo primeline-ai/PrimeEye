@@ -1,69 +1,46 @@
 import CoreGraphics
 
-/// Body-pose joints PrimeEye needs for posture, in a normalized coordinate space
-/// (Vision's: origin bottom-left, x/y in 0...1, y increasing upward).
-/// A joint is `nil` when it was not detected with sufficient confidence.
-public struct PostureJoints: Equatable, Sendable {
-    public var nose: CGPoint?
-    public var leftEar: CGPoint?
-    public var rightEar: CGPoint?
-    public var leftShoulder: CGPoint?
-    public var rightShoulder: CGPoint?
-
-    public init(
-        nose: CGPoint? = nil,
-        leftEar: CGPoint? = nil,
-        rightEar: CGPoint? = nil,
-        leftShoulder: CGPoint? = nil,
-        rightShoulder: CGPoint? = nil
-    ) {
-        self.nose = nose
-        self.leftEar = leftEar
-        self.rightEar = rightEar
-        self.leftShoulder = leftShoulder
-        self.rightShoulder = rightShoulder
-    }
-}
-
-/// Scale-invariant posture metrics (normalized by shoulder width, so distance to the
-/// camera does not change them). The discriminative power of the exact thresholds is
-/// validated on real hardware (plan A3/K2); this type only defines the geometry.
+/// Scale/position posture metrics derived from the detected FACE rectangle - the only thing
+/// a MacBook camera reliably sees at desk distance. Body-pose was dropped: at a laptop the
+/// torso is out of frame, so shoulders are never detected (measured: 0/57 frames).
+///
+/// Unlike the old shoulder metric, these are deliberately NOT scale-invariant - distance IS
+/// the signal: as you slump/crane toward the screen your face grows and drops in the frame.
 public struct SlouchMetrics: Equatable, Sendable, Codable {
-    /// Signed lateral offset of the ear-midpoint from the shoulder-midpoint, / shoulder width.
-    /// Drifts when the head tilts/leans to one side relative to the calibrated pose.
-    public var forwardHead: Double
-    /// Vertical gap from the shoulder-midpoint up to the ear-midpoint, / shoulder width.
-    /// Large = head held high (upright); small = head dropped toward shoulders (slump).
-    public var slump: Double
+    /// Face bounding-box height, 0...1 of frame. Bigger = you leaned in / craned forward.
+    public var faceSize: Double
+    /// Face bounding-box vertical center, 0...1 (Vision origin bottom-left, so higher = head up).
+    /// Smaller = head dropped toward the desk.
+    public var faceCenterY: Double
 
-    public init(forwardHead: Double, slump: Double) {
-        self.forwardHead = forwardHead
-        self.slump = slump
+    public init(faceSize: Double, faceCenterY: Double) {
+        self.faceSize = faceSize
+        self.faceCenterY = faceCenterY
     }
 }
 
-/// Calibrated upright reference for one user (mean of metrics captured while sitting up).
+/// Calibrated upright reference for one user (mean face geometry while sitting up straight).
 public struct Baseline: Equatable, Sendable, Codable {
-    public var forwardHead: Double
-    public var slump: Double
+    public var faceSize: Double
+    public var faceCenterY: Double
 
-    public init(forwardHead: Double, slump: Double) {
-        self.forwardHead = forwardHead
-        self.slump = slump
+    public init(faceSize: Double, faceCenterY: Double) {
+        self.faceSize = faceSize
+        self.faceCenterY = faceCenterY
     }
 }
 
-/// How far from baseline counts as a slouch. Tunable - plan K2 allows two tuning rounds
-/// on hardware before falling back to stats-only mode.
+/// How far from baseline counts as a slouch. Fixed, sensible defaults (not variance-derived)
+/// so the warning fires promptly - calibration sets the baseline, these set the sensitivity.
 public struct PostureThresholds: Equatable, Sendable, Codable {
-    /// Allowed absolute deviation of `forwardHead` from baseline before flagging.
-    public var forwardHeadDelta: Double
-    /// Allowed drop of `slump` below baseline before flagging.
-    public var slumpDelta: Double
+    /// How much the face may GROW (lean-in) past baseline before flagging. Fraction of frame.
+    public var sizeDelta: Double
+    /// How far the face center may DROP below baseline before flagging. Fraction of frame.
+    public var dropDelta: Double
 
-    public init(forwardHeadDelta: Double = 0.18, slumpDelta: Double = 0.18) {
-        self.forwardHeadDelta = forwardHeadDelta
-        self.slumpDelta = slumpDelta
+    public init(sizeDelta: Double = 0.045, dropDelta: Double = 0.040) {
+        self.sizeDelta = sizeDelta
+        self.dropDelta = dropDelta
     }
 
     public static let `default` = PostureThresholds()
@@ -73,5 +50,8 @@ public struct PostureThresholds: Equatable, Sendable, Codable {
 public enum PostureState: Equatable, Sendable {
     case upright
     case slouching
-    case unknown   // joints not visible / confidence too low / not calibrated yet
+    /// A person IS in frame (face detected) but posture can't be measured this frame -
+    /// e.g. no baseline yet. Counts as "present" but is never nudged and never scored.
+    case presentUnmeasured
+    case unknown   // no face detected at all (away from the Mac)
 }

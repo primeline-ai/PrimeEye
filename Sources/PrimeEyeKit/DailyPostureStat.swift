@@ -57,8 +57,8 @@ public struct DailyStatTracker: Sendable {
             stat.countedFrames += 1
         case .slouching:
             stat.countedFrames += 1
-        case .unknown:
-            break
+        case .unknown, .presentUnmeasured:
+            break   // not a measured posture frame -> excluded from the daily ratio
         }
     }
 

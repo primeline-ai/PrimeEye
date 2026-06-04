@@ -79,6 +79,24 @@ final class WarningCoordinatorTests: XCTestCase {
         XCTAssertEqual(c.nudgeCount, 0)
     }
 
+    func testPresentUnmeasuredNeverNudges() {
+        // Shoulders out of frame for a long stretch (face seen, posture unmeasurable) must
+        // never warn - it is not a slouch, just an unmeasured frame.
+        var c = WarningCoordinator()
+        for t in stride(from: 0.0, through: 120.0, by: 3.0) {
+            XCTAssertEqual(c.update(.presentUnmeasured, at: t), .none)
+        }
+        XCTAssertEqual(c.nudgeCount, 0)
+    }
+
+    func testPresentUnmeasuredRecoversAnActiveGlow() {
+        var c = WarningCoordinator()
+        c.update(.slouching, at: 0)
+        c.update(.slouching, at: 5)            // glow
+        c.update(.presentUnmeasured, at: 6)
+        XCTAssertEqual(c.update(.presentUnmeasured, at: 9), .none)
+    }
+
     func testDirectJumpToMessageCountsOneNudge() {
         // Large gap between samples (e.g. wake from sleep) lands straight past messageDelay.
         var c = WarningCoordinator()

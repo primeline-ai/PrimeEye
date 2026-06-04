@@ -29,7 +29,7 @@ final class CalibrationController {
     private func finish() {
         guard isCalibrating, let baseline = accumulator.baseline() else { return }
         isCalibrating = false
-        let thresholds = accumulator.suggestedThresholds() ?? .default
-        onComplete?(baseline, thresholds)
+        // Fixed, sensible sensitivity (not variance-derived) so the nudge fires promptly.
+        onComplete?(baseline, .default)
     }
 }

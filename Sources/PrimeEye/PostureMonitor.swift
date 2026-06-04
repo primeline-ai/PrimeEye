@@ -16,10 +16,9 @@ import PrimeEyeKit
 final class PostureMonitor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     private let session = AVCaptureSession()
     private let videoQueue = DispatchQueue(label: "cc.primeline.primeeye.posture")
-    private let request = VNDetectHumanBodyPoseRequest()
+    private let faceRequest = VNDetectFaceRectanglesRequest()   // the only signal a laptop cam reliably sees
 
     private let minInterval: CFTimeInterval = 1.0 / 3.0   // ~3 fps throttle
-    private let minConfidence: Float = 0.3
 
     // videoQueue-only state (never touched off the videoQueue → no locks needed)
     private var lastProcessed: CFTimeInterval = 0
@@ -127,36 +126,45 @@ final class PostureMonitor: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
         do {
-            try handler.perform([request])
+            try handler.perform([faceRequest])
         } catch {
             return   // a single dropped frame is harmless at 3fps
         }
 
-        let joints = Self.extractJoints(from: request, minConfidence: minConfidence)
-        let metrics = PostureMetrics.metrics(from: joints)
+        let face = faceRequest.results?.first
+        let metrics = face.flatMap { PostureMetrics.metrics(faceBoundingBox: $0.boundingBox) }
         let state: PostureState
         if let metrics, let baseline {
             state = PostureMetrics.classify(metrics, baseline: baseline, thresholds: thresholds)
+        } else if face != nil {
+            // Face in frame but not yet calibrated -> present, just unmeasured (no nudge/score).
+            state = .presentUnmeasured
         } else {
-            state = .unknown   // joints not visible, or not calibrated yet
+            state = .unknown   // no face -> truly away
         }
+        Self.debugLog(metrics: metrics, facePresent: face != nil, hasBaseline: baseline != nil, state: state)
         emit(state, metrics)
         // sampleBuffer goes out of scope here - the frame is never retained or stored.
     }
 
-    private static func extractJoints(from request: VNDetectHumanBodyPoseRequest,
-                                      minConfidence: Float) -> PostureJoints {
-        guard let obs = request.results?.first else { return PostureJoints() }
-        func point(_ name: VNHumanBodyPoseObservation.JointName) -> CGPoint? {
-            guard let p = try? obs.recognizedPoint(name), p.confidence >= minConfidence else { return nil }
-            return p.location   // normalized, origin bottom-left
+    /// Opt-in per-frame diagnostic, gated by the existence of `~/.primeeye-debug` (so it costs
+    /// nothing in normal use and needs no env-var plumbing into the .app bundle). Appends one
+    /// line per processed frame to `~/.primeeye-posture.log`. Delete the flag file to stop.
+    private static func debugLog(metrics: SlouchMetrics?, facePresent: Bool, hasBaseline: Bool, state: PostureState) {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        guard FileManager.default.fileExists(atPath: home.appendingPathComponent(".primeeye-debug").path) else { return }
+        let size = metrics.map { String(format: "%.3f", $0.faceSize) } ?? "-"
+        let cy = metrics.map { String(format: "%.3f", $0.faceCenterY) } ?? "-"
+        let line = "face=\(facePresent) baseline=\(hasBaseline) faceSize=\(size) faceCenterY=\(cy) -> \(state)\n"
+        let url = home.appendingPathComponent(".primeeye-posture.log")
+        if let data = line.data(using: .utf8) {
+            if let fh = try? FileHandle(forWritingTo: url) {
+                defer { try? fh.close() }
+                _ = try? fh.seekToEnd()
+                try? fh.write(contentsOf: data)
+            } else {
+                try? data.write(to: url)
+            }
         }
-        return PostureJoints(
-            nose: point(.nose),
-            leftEar: point(.leftEar),
-            rightEar: point(.rightEar),
-            leftShoulder: point(.leftShoulder),
-            rightShoulder: point(.rightShoulder)
-        )
     }
 }

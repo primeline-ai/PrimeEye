@@ -12,7 +12,9 @@ import PrimeEyeKit
 final class PostureService {
     private let monitor = PostureMonitor()
     private let calibration = CalibrationController()
-    private var coordinator = WarningCoordinator()
+    // Snappy escalation: glow ~2.5s after you slouch, message ~6s, recover after ~2s upright.
+    // (Was 5s/20s - far too slow to be useful as a live posture nudge.)
+    private var coordinator = WarningCoordinator(glowDelay: 2.5, messageDelay: 6, recoveryHold: 2)
     private var tracker: DailyStatTracker
     private weak var state: AppState?
     private var framesSinceSave = 0
@@ -50,8 +52,10 @@ final class PostureService {
         }
         state?.postureActive = true
         monitor.requestAccessAndStart()
-        // No saved baseline -> calibrate against the first upright frames.
-        if !hasPersistedBaseline { calibration.begin() }
+        // Calibration is now ALWAYS deliberate - never auto-run on launch (that silently
+        // captured whatever pose the user happened to be in). With no saved baseline the app
+        // sits in presentUnmeasured ("measuring") until the user triggers Recalibrate (menu
+        // bar) or drops the ~/.primeeye-recalibrate flag.
     }
 
     func stop() {
@@ -68,6 +72,15 @@ final class PostureService {
     // MARK: pipeline
 
     private func handle(_ postureState: PostureState, _ metrics: SlouchMetrics?) {
+        // Operator-triggered recalibration: drop a `~/.primeeye-recalibrate` file and the next
+        // ~10 frames become the new upright baseline. Lets calibration be a deliberate, observed
+        // step (the silent auto-calibrate-on-first-frames was the "calibrated me as a shrimp" bug).
+        if Self.consumeRecalibrateFlag() {
+            hasPersistedBaseline = false
+            state?.postureMeasured = false
+            calibration.begin()
+        }
+
         // While calibrating, frames train the baseline and do not warn or count toward stats.
         if calibration.isCalibrating {
             calibration.feed(metrics)
@@ -107,6 +120,14 @@ final class PostureService {
             state?.postureMeasured = true
         }
         state?.nudgesToday = tracker.stat.nudges
+    }
+
+    /// True exactly once after a `~/.primeeye-recalibrate` flag appears (then deletes it).
+    private static func consumeRecalibrateFlag() -> Bool {
+        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".primeeye-recalibrate")
+        guard FileManager.default.fileExists(atPath: url.path) else { return false }
+        try? FileManager.default.removeItem(at: url)
+        return true
     }
 
     private func startDemo(stage: String) {
